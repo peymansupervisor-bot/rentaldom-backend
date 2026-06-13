@@ -19,7 +19,7 @@ const tokenLimit = rateLimit({
 
 // ─── POST /auth/verify-firebase-token ────────────────────────────────────────
 // Called by the app after Firebase Phone Auth confirms the OTP on-device.
-// Receives the Firebase ID token, validates it, and returns a RentalDom JWT.
+// Receives the Firebase ID token, validates it, and returns an Emlakie JWT.
 router.post('/verify-firebase-token', tokenLimit, async (req, res): Promise<void> => {
   const { idToken } = req.body as { idToken?: string };
 
@@ -50,7 +50,7 @@ router.post('/verify-firebase-token', tokenLimit, async (req, res): Promise<void
     isNewUser = true;
     const { data: created, error } = await supabase
       .from('profiles')
-      .insert({ phone, email: `${phone.replace(/\D/g, '')}@rentaldom.com` })
+      .insert({ phone, email: `${phone.replace(/\D/g, '')}@emlakie.com` })
       .select()
       .single();
 
