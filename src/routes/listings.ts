@@ -6,6 +6,24 @@ import { upload } from '../middleware/upload';
 import { scoreApplication } from '../lib/claude';
 import { notifyUser } from '../lib/notifications';
 
+async function triggerCityPageRevalidation(zip: string | undefined): Promise<void> {
+  if (!zip || !process.env.REVALIDATE_SECRET) return;
+  const siteUrl = process.env.SITE_URL ?? 'https://emlakie.com';
+  try {
+    await fetch(`${siteUrl}/api/revalidate`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-revalidate-secret': process.env.REVALIDATE_SECRET,
+      },
+      body: JSON.stringify({ zip }),
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch {
+    // Non-fatal: ISR will catch up on next revalidation cycle
+  }
+}
+
 const router = Router();
 
 // Normalize DB listing columns to the shape the mobile app expects
@@ -174,6 +192,8 @@ router.post(
       res.status(500).json({ error: error?.message ?? 'Could not create listing' });
       return;
     }
+
+    triggerCityPageRevalidation(zip);
     res.status(201).json(normalizeListing(data));
   }
 );
