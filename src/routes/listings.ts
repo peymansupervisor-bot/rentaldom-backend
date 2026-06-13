@@ -26,6 +26,14 @@ async function triggerCityPageRevalidation(zip: string | undefined): Promise<voi
 
 const router = Router();
 
+const EXPIRY_DAYS = 45;
+
+function expiresAt(from: Date = new Date()): string {
+  const d = new Date(from);
+  d.setDate(d.getDate() + EXPIRY_DAYS);
+  return d.toISOString();
+}
+
 // Normalize DB listing columns to the shape the mobile app expects
 function normalizeListing(l: any) {
   return {
@@ -34,19 +42,23 @@ function normalizeListing(l: any) {
     sqft: l.living_area_sqft,
     availableFrom: l.available_date,
     status: l.rental_status ?? 'active',
+    expiresAt: l.expires_at ?? null,
   };
 }
 
 // ─── GET /listings ────────────────────────────────────────────────────────────
 router.get('/', async (req, res): Promise<void> => {
-  const { city, minPrice, maxPrice, bedrooms, propertyType, page = '1', limit = '20' } = req.query as Record<string, string>;
+  const { city, zip, minPrice, maxPrice, bedrooms, propertyType, page = '1', limit = '20' } = req.query as Record<string, string>;
 
   let query = supabase
     .from('listings')
     .select('*', { count: 'exact' })
     .eq('rental_status', 'active')
+    .gt('expires_at', new Date().toISOString())   // exclude expired listings
     .order('refreshed_at', { ascending: false })
     .range((+page - 1) * +limit, +page * +limit - 1);
+
+  if (zip) query = query.eq('zip', zip);
 
   if (city) query = query.ilike('city', `%${city}%`);
   if (minPrice) query = query.gte('monthly_rent', +minPrice);
@@ -181,6 +193,7 @@ router.post(
         applicant_count: 0,
         refreshed_at: new Date().toISOString(),
         listed_date: new Date().toISOString().split('T')[0],
+        expires_at: expiresAt(),
         contact_name: profile?.display_name ?? null,
         contact_email: profile?.email ?? null,
         contact_phone: profile?.phone ?? null,
@@ -252,6 +265,56 @@ router.delete('/:id', requireAuth, async (req: AuthRequest, res): Promise<void> 
 
   await supabase.from('listings').delete().eq('id', req.params.id);
   res.json({ ok: true });
+});
+
+// ─── POST /listings/:id/extend ───────────────────────────────────────────────
+// Extend listing expiry by 45 days from today
+router.post('/:id/extend', requireAuth, async (req: AuthRequest, res): Promise<void> => {
+  const { data: listing } = await supabase
+    .from('listings')
+    .select('landlord_id, rental_status')
+    .eq('id', req.params.id)
+    .single();
+
+  if (!listing || listing.landlord_id !== req.userId) {
+    res.status(403).json({ error: 'Not authorized' });
+    return;
+  }
+
+  const newExpiry = expiresAt();
+  const { data, error } = await supabase
+    .from('listings')
+    .update({ expires_at: newExpiry, rental_status: 'active' })
+    .eq('id', req.params.id)
+    .select()
+    .single();
+
+  if (error) { res.status(500).json({ error: error.message }); return; }
+  res.json({ ...normalizeListing(data), expiresAt: newExpiry });
+});
+
+// ─── POST /listings/:id/deactivate ───────────────────────────────────────────
+router.post('/:id/deactivate', requireAuth, async (req: AuthRequest, res): Promise<void> => {
+  const { data: listing } = await supabase
+    .from('listings')
+    .select('landlord_id')
+    .eq('id', req.params.id)
+    .single();
+
+  if (!listing || listing.landlord_id !== req.userId) {
+    res.status(403).json({ error: 'Not authorized' });
+    return;
+  }
+
+  const { data, error } = await supabase
+    .from('listings')
+    .update({ rental_status: 'paused' })
+    .eq('id', req.params.id)
+    .select()
+    .single();
+
+  if (error) { res.status(500).json({ error: error.message }); return; }
+  res.json(normalizeListing(data));
 });
 
 // ─── POST /listings/:id/refresh ───────────────────────────────────────────────
