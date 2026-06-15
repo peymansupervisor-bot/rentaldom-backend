@@ -488,6 +488,96 @@ router.post('/:id/apply', requireAuth, async (req: AuthRequest, res): Promise<vo
   res.status(201).json(application);
 });
 
+// ─── POST /listings/:id/apply-web ─────────────────────────────────────────────
+// Public endpoint — no auth required. Used by the emlakie.com website form.
+router.post('/:id/apply-web', async (req, res): Promise<void> => {
+  const { tenantName, tenantPhone, income, moveIn, creditScore, message } = req.body as Record<string, string>;
+
+  if (!tenantName || !tenantPhone || !income || !message) {
+    res.status(400).json({ error: 'Name, phone, income, and message are required' });
+    return;
+  }
+
+  const { data: listing } = await supabase
+    .from('listings')
+    .select('monthly_rent, bedrooms, property_type, landlord_id, title, address, city, state, rental_status')
+    .eq('id', req.params.id)
+    .single();
+
+  if (!listing) { res.status(404).json({ error: 'Listing not found' }); return; }
+  if (listing.rental_status !== 'active') { res.status(409).json({ error: 'Listing is no longer active' }); return; }
+
+  let aiScore = null;
+  let aiSummary = null;
+  try {
+    const result = await scoreApplication({
+      listing: { price: listing.monthly_rent, bedrooms: listing.bedrooms, propertyType: listing.property_type ?? 'house' },
+      application: { income: +income, message },
+    });
+    aiScore = result.score;
+    aiSummary = result.summary;
+  } catch (e) {
+    console.error('AI scoring failed (non-fatal):', e);
+  }
+
+  const { data: application, error } = await supabase
+    .from('applications')
+    .insert({
+      listing_id: String(req.params.id),
+      tenant_id: null,
+      tenant_name: tenantName,
+      tenant_phone: tenantPhone,
+      message,
+      income: +income,
+      move_in: moveIn || null,
+      credit_score: creditScore ? +creditScore : null,
+      ai_match_score: aiScore,
+      ai_summary: aiSummary,
+      status: 'pending',
+      source: 'web',
+    })
+    .select()
+    .single();
+
+  if (error) { res.status(500).json({ error: error.message }); return; }
+
+  supabase.rpc('increment_applicant_count', { listing_id: req.params.id }).then(() => {});
+
+  if (listing.landlord_id) {
+    const { data: landlord } = await supabase
+      .from('profiles').select('display_name, email').eq('id', listing.landlord_id).single();
+
+    notifyUser(supabase, listing.landlord_id, {
+      title: '🌐 New Web Application',
+      body: `${tenantName} applied via the website`,
+      data: { screen: 'applications', listingId: String(req.params.id) },
+    }).catch(() => {});
+
+    if (landlord?.email) {
+      sendApplicationEmail({
+        landlordEmail: landlord.email,
+        landlordName: landlord.display_name ?? 'there',
+        tenantName,
+        tenantPhone,
+        income: +income,
+        message,
+        moveIn: moveIn || undefined,
+        creditScore: creditScore ? +creditScore : undefined,
+        listingTitle: listing.title ?? 'Your listing',
+        listingAddress: listing.address ?? '',
+        listingCity: listing.city ?? '',
+        listingState: listing.state ?? '',
+        listingPrice: listing.monthly_rent,
+        listingId: String(req.params.id),
+        aiScore,
+        aiSummary,
+      }).catch(() => {});
+    }
+  }
+
+  res.status(201).json(application);
+});
+
 // ─── GET /listings/:id/applications ──────────────────────────────────────────
 router.get('/:id/applications', requireAuth, async (req: AuthRequest, res): Promise<void> => {
   const { data: listing } = await supabase

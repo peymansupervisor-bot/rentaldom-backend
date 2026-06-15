@@ -10,6 +10,7 @@ export interface ApplicationEmailData {
   income: number;
   message: string;
   moveIn?: string;
+  creditScore?: number;
   listingTitle: string;
   listingAddress: string;
   listingCity: string;
@@ -118,6 +119,12 @@ export async function sendApplicationEmail(data: ApplicationEmailData): Promise<
                       <p style="margin:4px 0 0;font-size:18px;font-weight:800;color:#111827;">${(data.income / data.listingPrice).toFixed(1)}×</p>
                     </td>
                   </tr>
+                  ${data.creditScore ? `<tr>
+                    <td colspan="2" style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:14px 16px;">
+                      <p style="margin:0;font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.05em;">Credit Score</p>
+                      <p style="margin:4px 0 0;font-size:18px;font-weight:800;color:#111827;">${data.creditScore}</p>
+                    </td>
+                  </tr>` : ''}
                   ${data.moveIn ? `<tr>
                     <td colspan="2" style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:14px 16px;">
                       <p style="margin:0;font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.05em;">Desired Move-in</p>
