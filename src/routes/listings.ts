@@ -5,6 +5,7 @@ import { requireAuth, AuthRequest } from '../middleware/auth';
 import { upload } from '../middleware/upload';
 import { scoreApplication } from '../lib/claude';
 import { notifyUser } from '../lib/notifications';
+import { sendApplicationEmail } from '../lib/email';
 
 async function triggerCityPageRevalidation(zip: string | undefined): Promise<void> {
   if (!zip || !process.env.REVALIDATE_SECRET) return;
@@ -34,6 +35,16 @@ function expiresAt(from: Date = new Date()): string {
   return d.toISOString();
 }
 
+// Days on Market — days since dom_start_date (first listing this calendar year)
+function calcDom(domStartDate?: string | null): number {
+  if (!domStartDate) return 0;
+  const start = new Date(domStartDate);
+  start.setHours(0, 0, 0, 0);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return Math.max(0, Math.floor((today.getTime() - start.getTime()) / 86400000));
+}
+
 // Normalize DB listing columns to the shape the mobile app expects
 function normalizeListing(l: any) {
   return {
@@ -43,7 +54,32 @@ function normalizeListing(l: any) {
     availableFrom: l.available_date,
     status: l.rental_status ?? 'active',
     expiresAt: l.expires_at ?? null,
+    dom: calcDom(l.dom_start_date),
+    domStartDate: l.dom_start_date ?? null,
   };
+}
+
+// Resolve DOM start date for a new listing:
+// - If same landlord listed the same address earlier THIS year and it wasn't rented → carry DOM forward
+// - If it was rented → fresh start (property was genuinely off market)
+// - New year → fresh start
+async function resolveDomStartDate(landlordId: string, address: string): Promise<string> {
+  const today = new Date();
+  const yearStart = `${today.getFullYear()}-01-01`;
+  const todayStr = today.toISOString().split('T')[0];
+
+  const { data } = await supabase
+    .from('listings')
+    .select('dom_start_date')
+    .eq('landlord_id', landlordId)
+    .ilike('address', address.trim())
+    .neq('rental_status', 'rented')           // rented = was genuinely off market, DOM resets
+    .gte('listed_date', yearStart)             // same calendar year only
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  return data?.dom_start_date ?? todayStr;
 }
 
 // ─── GET /listings ────────────────────────────────────────────────────────────
@@ -170,6 +206,8 @@ router.post(
       return;
     }
 
+    const domStartDate = await resolveDomStartDate(req.userId!, address);
+
     const { data, error } = await supabase
       .from('listings')
       .insert({
@@ -194,6 +232,7 @@ router.post(
         refreshed_at: new Date().toISOString(),
         listed_date: new Date().toISOString().split('T')[0],
         expires_at: expiresAt(),
+        dom_start_date: domStartDate,
         contact_name: profile?.display_name ?? null,
         contact_email: profile?.email ?? null,
         contact_phone: profile?.phone ?? null,
@@ -351,7 +390,7 @@ router.post('/:id/refresh', requireAuth, async (req: AuthRequest, res): Promise<
 
 // ─── POST /listings/:id/apply ─────────────────────────────────────────────────
 router.post('/:id/apply', requireAuth, async (req: AuthRequest, res): Promise<void> => {
-  const { message, income, tenantPhone, tenantName } = req.body as Record<string, string>;
+  const { message, income, tenantPhone, tenantName, moveIn } = req.body as Record<string, string>;
 
   if (!message || !income) {
     res.status(400).json({ error: 'Message and income are required' });
@@ -372,7 +411,7 @@ router.post('/:id/apply', requireAuth, async (req: AuthRequest, res): Promise<vo
 
   const { data: listing } = await supabase
     .from('listings')
-    .select('monthly_rent, bedrooms, property_type, landlord_id')
+    .select('monthly_rent, bedrooms, property_type, landlord_id, title, address, city, state')
     .eq('id', req.params.id)
     .single();
 
@@ -400,6 +439,7 @@ router.post('/:id/apply', requireAuth, async (req: AuthRequest, res): Promise<vo
       tenant_phone: tenantPhone,
       message,
       income: +income,
+      move_in: moveIn || null,
       ai_match_score: aiScore,
       ai_summary: aiSummary,
       status: 'pending',
@@ -413,13 +453,36 @@ router.post('/:id/apply', requireAuth, async (req: AuthRequest, res): Promise<vo
 
   // Notify landlord of new application (fire and forget)
   if (listing?.landlord_id) {
+    const { data: landlord } = await supabase
+      .from('profiles').select('display_name, email').eq('id', listing.landlord_id).single();
     const { data: tenant } = await supabase
       .from('profiles').select('display_name').eq('id', req.userId).single();
+
     notifyUser(supabase, listing.landlord_id, {
       title: '📋 New Application',
-      body: `${tenant?.display_name ?? 'Someone'} applied to your listing`,
+      body: `${tenantName || tenant?.display_name || 'Someone'} applied to your listing`,
       data: { screen: 'applications', listingId: req.params.id },
     }).catch(() => {});
+
+    if (landlord?.email) {
+      sendApplicationEmail({
+        landlordEmail: landlord.email,
+        landlordName: landlord.display_name ?? 'there',
+        tenantName: tenantName || tenant?.display_name || 'Applicant',
+        tenantPhone: tenantPhone ?? '',
+        income: +income,
+        message,
+        moveIn: moveIn || undefined,
+        listingTitle: listing.title ?? 'Your listing',
+        listingAddress: listing.address ?? '',
+        listingCity: listing.city ?? '',
+        listingState: listing.state ?? '',
+        listingPrice: listing.monthly_rent,
+        listingId: String(req.params.id),
+        aiScore: aiScore,
+        aiSummary: aiSummary,
+      }).catch(() => {});
+    }
   }
 
   res.status(201).json(application);
