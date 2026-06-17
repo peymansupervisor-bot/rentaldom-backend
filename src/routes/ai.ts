@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth';
 import { generateListingContent, generateRentSuggestion } from '../lib/claude';
-import rateLimit from 'express-rate-limit';
+import { rateLimit } from '../lib/rateLimit';
 
 const router = Router();
 

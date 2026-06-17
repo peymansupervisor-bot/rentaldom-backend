@@ -11,4 +11,4 @@ export const supabase = createClient(
   { auth: { persistSession: false } }
 );
 
-export const BUCKET = process.env.SUPABASE_STORAGE_BUCKET ?? 'keylink-media';
+export const BUCKET = process.env.SUPABASE_STORAGE_BUCKET ?? 'emlakie-media';

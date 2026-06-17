@@ -2,7 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import rateLimit from 'express-rate-limit';
+import { rateLimit } from '../src/lib/rateLimit';
 
 import authRouter from '../src/routes/auth';
 import listingsRouter from '../src/routes/listings';

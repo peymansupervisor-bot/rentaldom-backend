@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: rentaldom-api
+    name: emlakie-api
     runtime: node
     plan: free
     region: oregon
