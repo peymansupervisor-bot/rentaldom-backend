@@ -5,13 +5,8 @@
       "src": "api/index.ts",
       "use": "@vercel/node",
       "config": {
-        "bundle": true,
-        "externalModules": [
-          "sharp",
-          "firebase-admin",
-          "firebase-admin/app",
-          "firebase-admin/auth"
-        ]
+        "bundle": false,
+        "includeFiles": ["src/**", "node_modules/**"]
       }
     }
   ],
