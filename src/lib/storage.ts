@@ -1,6 +1,6 @@
 import { supabase, BUCKET } from './supabase';
 import sharp from 'sharp';
-import { v4 as uuid } from 'uuid';
+import { randomUUID } from 'crypto';
 
 // Resize + compress an image buffer, upload to Supabase Storage, return public URL
 export async function uploadImage(
@@ -16,7 +16,7 @@ export async function uploadImage(
     .jpeg({ quality, progressive: true })
     .toBuffer();
 
-  const filename = `${folder}/${uuid()}.jpg`;
+  const filename = `${folder}/${randomUUID()}.jpg`;
 
   const { error } = await supabase.storage
     .from(BUCKET)
