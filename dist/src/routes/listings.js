@@ -511,8 +511,8 @@ router.post('/:id/apply-web', async (req, res) => {
         const { data: landlord } = await supabase_1.supabase
             .from('profiles').select('display_name, email').eq('id', listing.landlord_id).single();
         (0, notifications_1.notifyUser)(supabase_1.supabase, listing.landlord_id, {
-            title: '🌐 New Web Application',
-            body: `${tenantName} applied via the website`,
+            title: '🌐 New Inquiry',
+            body: `${tenantName} sent an inquiry via the website`,
             data: { screen: 'applications', listingId: String(req.params.id) },
         }).catch(() => { });
         if (landlord?.email) {

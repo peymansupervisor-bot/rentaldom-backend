@@ -60,7 +60,7 @@ export async function sendApplicationEmail(data: ApplicationEmailData): Promise<
         <tr>
           <td style="background:#16a34a;border-radius:16px 16px 0 0;padding:28px 32px 24px;text-align:center;">
             <p style="margin:0;font-size:22px;font-weight:900;color:#fff;letter-spacing:-.5px;">EMLAKIE</p>
-            <p style="margin:6px 0 0;font-size:13px;color:#bbf7d0;font-weight:500;">Rental Application Notification</p>
+            <p style="margin:6px 0 0;font-size:13px;color:#bbf7d0;font-weight:500;">New Rental Inquiry</p>
           </td>
         </tr>
 
@@ -73,7 +73,7 @@ export async function sendApplicationEmail(data: ApplicationEmailData): Promise<
               <td style="padding:28px 32px 20px;">
                 <p style="margin:0;font-size:15px;color:#374151;line-height:1.6;">
                   Hi <strong>${data.landlordName}</strong>,<br>
-                  You have a new rental application for:
+                  You have a new rental inquiry for:
                 </p>
                 <a href="${listingUrl}" style="display:block;margin-top:12px;padding:14px 18px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;text-decoration:none;">
                   <p style="margin:0;font-size:15px;font-weight:700;color:#16a34a;">${data.listingTitle}</p>
@@ -184,7 +184,7 @@ export async function sendApplicationEmail(data: ApplicationEmailData): Promise<
       from: FROM,
       to: data.landlordEmail,
       replyTo: data.tenantPhone ? undefined : undefined,
-      subject: `New Application: ${data.tenantName} is interested in ${data.listingTitle}`,
+      subject: `New Inquiry: ${data.tenantName} is interested in ${data.listingTitle}`,
       html,
     });
   } catch (err) {

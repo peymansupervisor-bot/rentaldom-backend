@@ -548,8 +548,8 @@ router.post('/:id/apply-web', async (req, res): Promise<void> => {
       .from('profiles').select('display_name, email').eq('id', listing.landlord_id).single();
 
     notifyUser(supabase, listing.landlord_id, {
-      title: '🌐 New Web Application',
-      body: `${tenantName} applied via the website`,
+      title: '🌐 New Inquiry',
+      body: `${tenantName} sent an inquiry via the website`,
       data: { screen: 'applications', listingId: String(req.params.id) },
     }).catch(() => {});
 
