@@ -1,19 +1,24 @@
 {
   "version": 2,
-  "buildCommand": "npm run build",
   "builds": [
     {
-      "src": "dist/api/index.js",
+      "src": "api/index.ts",
       "use": "@vercel/node",
       "config": {
-        "bundle": false
+        "bundle": true,
+        "externalModules": [
+          "sharp",
+          "firebase-admin",
+          "firebase-admin/app",
+          "firebase-admin/auth"
+        ]
       }
     }
   ],
   "routes": [
     {
       "src": "/(.*)",
-      "dest": "dist/api/index.js"
+      "dest": "api/index.ts"
     }
   ]
 }
