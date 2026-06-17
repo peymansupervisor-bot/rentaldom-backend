@@ -1,0 +1,19 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "api/debug.ts",
+      "use": "@vercel/node",
+      "config": {
+        "bundle": false,
+        "includeFiles": ["node_modules/**"]
+      }
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "api/debug.ts"
+    }
+  ]
+}
