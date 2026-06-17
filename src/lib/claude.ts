@@ -102,3 +102,32 @@ Return ONLY valid JSON:
   const raw = (message.content[0] as { type: string; text: string }).text.trim();
   return JSON.parse(raw);
 }
+
+export async function generateTenantAutoReply(params: {
+  tenantName: string;
+  landlordName: string;
+  listingTitle: string;
+  listingCity: string;
+  listingPrice: number;
+  tenantMessage: string;
+}): Promise<string> {
+  const prompt = `You are a helpful property manager's assistant. Write a short, warm auto-reply email body (2–3 sentences) to a prospective tenant who just sent a rental inquiry.
+
+Listing: "${params.listingTitle}" in ${params.listingCity} at $${params.listingPrice}/mo
+Tenant name: ${params.tenantName}
+Landlord/property name: ${params.landlordName}
+Tenant message: "${params.tenantMessage}"
+
+Write only the body text (no subject, no greeting like "Hi X", no sign-off). Be warm, confirm receipt, mention the landlord will follow up soon. Do not make up any facts or commitments. Keep it under 60 words.`;
+
+  try {
+    const message = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 120,
+      messages: [{ role: 'user', content: prompt }],
+    });
+    return (message.content[0] as { type: string; text: string }).text.trim();
+  } catch {
+    return `Thank you for your inquiry about this property! Your message has been received and ${params.landlordName} will be in touch with you shortly.`;
+  }
+}

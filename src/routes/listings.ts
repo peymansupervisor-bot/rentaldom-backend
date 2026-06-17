@@ -3,9 +3,9 @@ import { supabase } from '../lib/supabase';
 import { uploadImage } from '../lib/storage';
 import { requireAuth, AuthRequest } from '../middleware/auth';
 import { upload } from '../middleware/upload';
-import { scoreApplication } from '../lib/claude';
+import { scoreApplication, generateTenantAutoReply } from '../lib/claude';
 import { notifyUser } from '../lib/notifications';
-import { sendApplicationEmail } from '../lib/email';
+import { sendApplicationEmail, sendTenantAutoReply } from '../lib/email';
 
 async function triggerCityPageRevalidation(zip: string | undefined): Promise<void> {
   if (!zip || !process.env.REVALIDATE_SECRET) return;
@@ -491,7 +491,7 @@ router.post('/:id/apply', requireAuth, async (req: AuthRequest, res): Promise<vo
 // ─── POST /listings/:id/apply-web ─────────────────────────────────────────────
 // Public endpoint — no auth required. Used by the emlakie.com website form.
 router.post('/:id/apply-web', async (req, res): Promise<void> => {
-  const { tenantName, tenantPhone, income, moveIn, creditScore, message } = req.body as Record<string, string>;
+  const { tenantName, tenantPhone, tenantEmail, income, moveIn, creditScore, message } = req.body as Record<string, string>;
 
   if (!tenantName || !tenantPhone || !income || !message) {
     res.status(400).json({ error: 'Name, phone, income, and message are required' });
@@ -572,6 +572,31 @@ router.post('/:id/apply-web', async (req, res): Promise<void> => {
         aiScore,
         aiSummary,
       }).catch(() => {});
+    }
+
+    // AI auto-reply to tenant
+    if (tenantEmail) {
+      generateTenantAutoReply({
+        tenantName,
+        landlordName: landlord?.display_name ?? 'the landlord',
+        listingTitle: listing.title ?? 'this property',
+        listingCity: listing.city ?? '',
+        listingPrice: listing.monthly_rent,
+        tenantMessage: message,
+      }).then((aiMessage) =>
+        sendTenantAutoReply({
+          tenantEmail,
+          tenantName,
+          landlordName: landlord?.display_name ?? 'the landlord',
+          listingTitle: listing.title ?? 'this property',
+          listingAddress: listing.address ?? '',
+          listingCity: listing.city ?? '',
+          listingState: listing.state ?? '',
+          listingPrice: listing.monthly_rent,
+          listingId: String(req.params.id),
+          aiMessage,
+        })
+      ).catch(() => {});
     }
   }
 

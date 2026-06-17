@@ -191,3 +191,71 @@ export async function sendApplicationEmail(data: ApplicationEmailData): Promise<
     console.error('[email] Failed to send landlord notification:', err);
   }
 }
+
+export async function sendTenantAutoReply(data: {
+  tenantEmail: string;
+  tenantName: string;
+  landlordName: string;
+  listingTitle: string;
+  listingAddress: string;
+  listingCity: string;
+  listingState: string;
+  listingPrice: number;
+  listingId: string;
+  aiMessage: string;
+}): Promise<void> {
+  if (!process.env.RESEND_API_KEY) return;
+  const resend = new Resend(process.env.RESEND_API_KEY);
+  const listingUrl = `https://emlakie.com/rentals/${data.listingId}`;
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Your inquiry was received</title></head>
+<body style="margin:0;padding:0;background:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 16px;">
+    <tr><td align="center">
+      <table width="100%" cellpadding="0" cellspacing="0" style="max-width:540px;">
+        <tr>
+          <td style="background:#16a34a;border-radius:16px 16px 0 0;padding:24px 32px;text-align:center;">
+            <p style="margin:0;font-size:22px;font-weight:900;color:#fff;">EMLAKIE</p>
+            <p style="margin:4px 0 0;font-size:13px;color:#bbf7d0;">Your inquiry was received</p>
+          </td>
+        </tr>
+        <tr>
+          <td style="background:#fff;border-radius:0 0 16px 16px;padding:28px 32px;">
+            <p style="margin:0 0 16px;font-size:15px;color:#374151;">Hi <strong>${data.tenantName}</strong>,</p>
+            <p style="margin:0 0 20px;font-size:14px;color:#374151;line-height:1.6;">${data.aiMessage}</p>
+            <a href="${listingUrl}" style="display:inline-block;background:#16a34a;color:#fff;text-decoration:none;font-size:14px;font-weight:700;padding:12px 28px;border-radius:10px;margin-bottom:24px;">
+              View Listing
+            </a>
+            <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:14px 16px;">
+              <p style="margin:0;font-size:13px;font-weight:700;color:#374151;">${data.listingTitle}</p>
+              <p style="margin:4px 0 0;font-size:12px;color:#6b7280;">${data.listingAddress}, ${data.listingCity}, ${data.listingState} · $${data.listingPrice.toLocaleString()}/mo</p>
+            </div>
+            <p style="margin:20px 0 0;font-size:12px;color:#9ca3af;">
+              This is an automated message from EMLAKIE. The landlord will follow up with you directly.
+            </p>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:16px 0;text-align:center;">
+            <p style="margin:0;font-size:11px;color:#d1d5db;">EMLAKIE · <a href="https://emlakie.com" style="color:#16a34a;text-decoration:none;">emlakie.com</a></p>
+          </td>
+        </tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+
+  try {
+    await resend.emails.send({
+      from: 'EMLAKIE <notifications@emlakie.com>',
+      to: data.tenantEmail,
+      subject: `Your inquiry for "${data.listingTitle}" was received`,
+      html,
+    });
+  } catch (err) {
+    console.error('[email] Failed to send tenant auto-reply:', err);
+  }
+}
