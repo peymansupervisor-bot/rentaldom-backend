@@ -1,0 +1,587 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const supabase_1 = require("../lib/supabase");
+const storage_1 = require("../lib/storage");
+const auth_1 = require("../middleware/auth");
+const upload_1 = require("../middleware/upload");
+const claude_1 = require("../lib/claude");
+const notifications_1 = require("../lib/notifications");
+const email_1 = require("../lib/email");
+async function triggerCityPageRevalidation(zip) {
+    if (!zip || !process.env.REVALIDATE_SECRET)
+        return;
+    const siteUrl = process.env.SITE_URL ?? 'https://emlakie.com';
+    try {
+        await fetch(`${siteUrl}/api/revalidate`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'x-revalidate-secret': process.env.REVALIDATE_SECRET,
+            },
+            body: JSON.stringify({ zip }),
+            signal: AbortSignal.timeout(5000),
+        });
+    }
+    catch {
+        // Non-fatal: ISR will catch up on next revalidation cycle
+    }
+}
+const router = (0, express_1.Router)();
+const EXPIRY_DAYS = 45;
+function expiresAt(from = new Date()) {
+    const d = new Date(from);
+    d.setDate(d.getDate() + EXPIRY_DAYS);
+    return d.toISOString();
+}
+// Days on Market — days since dom_start_date (first listing this calendar year)
+function calcDom(domStartDate) {
+    if (!domStartDate)
+        return 0;
+    const start = new Date(domStartDate);
+    start.setHours(0, 0, 0, 0);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return Math.max(0, Math.floor((today.getTime() - start.getTime()) / 86400000));
+}
+// Normalize DB listing columns to the shape the mobile app expects
+function normalizeListing(l) {
+    return {
+        ...l,
+        price: l.monthly_rent,
+        sqft: l.living_area_sqft,
+        availableFrom: l.available_date,
+        status: l.rental_status ?? 'active',
+        expiresAt: l.expires_at ?? null,
+        dom: calcDom(l.dom_start_date),
+        domStartDate: l.dom_start_date ?? null,
+    };
+}
+// Resolve DOM start date for a new listing:
+// - If same landlord listed the same address earlier THIS year and it wasn't rented → carry DOM forward
+// - If it was rented → fresh start (property was genuinely off market)
+// - New year → fresh start
+async function resolveDomStartDate(landlordId, address) {
+    const today = new Date();
+    const yearStart = `${today.getFullYear()}-01-01`;
+    const todayStr = today.toISOString().split('T')[0];
+    const { data } = await supabase_1.supabase
+        .from('listings')
+        .select('dom_start_date')
+        .eq('landlord_id', landlordId)
+        .ilike('address', address.trim())
+        .neq('rental_status', 'rented') // rented = was genuinely off market, DOM resets
+        .gte('listed_date', yearStart) // same calendar year only
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+    return data?.dom_start_date ?? todayStr;
+}
+// ─── GET /listings ────────────────────────────────────────────────────────────
+router.get('/', async (req, res) => {
+    const { city, zip, minPrice, maxPrice, bedrooms, propertyType, page = '1', limit = '20' } = req.query;
+    let query = supabase_1.supabase
+        .from('listings')
+        .select('*', { count: 'exact' })
+        .eq('rental_status', 'active')
+        .gt('expires_at', new Date().toISOString()) // exclude expired listings
+        .order('refreshed_at', { ascending: false })
+        .range((+page - 1) * +limit, +page * +limit - 1);
+    if (zip)
+        query = query.eq('zip', zip);
+    if (city)
+        query = query.ilike('city', `%${city}%`);
+    if (minPrice)
+        query = query.gte('monthly_rent', +minPrice);
+    if (maxPrice)
+        query = query.lte('monthly_rent', +maxPrice);
+    if (bedrooms)
+        query = query.eq('bedrooms', +bedrooms);
+    if (propertyType)
+        query = query.eq('property_type', propertyType);
+    const { data, error, count } = await query;
+    if (error) {
+        res.status(500).json({ error: error.message });
+        return;
+    }
+    res.json({ listings: (data ?? []).map(normalizeListing), total: count ?? 0 });
+});
+// ─── GET /listings/mine ───────────────────────────────────────────────────────
+router.get('/mine', auth_1.requireAuth, async (req, res) => {
+    const { data, error } = await supabase_1.supabase
+        .from('listings')
+        .select('*')
+        .eq('landlord_id', req.userId)
+        .order('created_at', { ascending: false });
+    if (error) {
+        res.status(500).json({ error: error.message });
+        return;
+    }
+    res.json((data ?? []).map(normalizeListing));
+});
+// ─── GET /listings/saved ──────────────────────────────────────────────────────
+router.get('/saved', auth_1.requireAuth, async (req, res) => {
+    const { data, error } = await supabase_1.supabase
+        .from('saved_listings')
+        .select('listing_id, saved_at, listings(*)')
+        .eq('user_id', req.userId)
+        .order('saved_at', { ascending: false });
+    if (error) {
+        res.status(500).json({ error: error.message });
+        return;
+    }
+    const listings = (data ?? []).map((row) => ({
+        ...normalizeListing(row.listings),
+        savedAt: row.saved_at,
+    }));
+    res.json(listings);
+});
+// ─── GET /listings/saved/ids ──────────────────────────────────────────────────
+// Lightweight: just the IDs, used to show heart state on listing cards
+router.get('/saved/ids', auth_1.requireAuth, async (req, res) => {
+    const { data, error } = await supabase_1.supabase
+        .from('saved_listings')
+        .select('listing_id')
+        .eq('user_id', req.userId);
+    if (error) {
+        res.status(500).json({ error: error.message });
+        return;
+    }
+    res.json((data ?? []).map((r) => r.listing_id));
+});
+// ─── GET /listings/:id ────────────────────────────────────────────────────────
+router.get('/:id', async (req, res) => {
+    const { data, error } = await supabase_1.supabase
+        .from('listings')
+        .select('*')
+        .eq('id', req.params.id)
+        .single();
+    if (error || !data) {
+        res.status(404).json({ error: 'Listing not found' });
+        return;
+    }
+    // Increment view count (fire and forget)
+    supabase_1.supabase.from('listings').update({ view_count: (data.view_count ?? 0) + 1 }).eq('id', data.id).then(() => { });
+    res.json(normalizeListing(data));
+});
+// ─── POST /listings ───────────────────────────────────────────────────────────
+router.post('/', auth_1.requireAuth, upload_1.upload.array('photos', 30), async (req, res) => {
+    const files = req.files;
+    if (!files || files.length < 1) {
+        res.status(400).json({ error: 'At least 1 photo is required' });
+        return;
+    }
+    const { title, description, address, city, state, zip, price, bedrooms, bathrooms, sqft, propertyType, availableFrom, amenities, } = req.body;
+    if (!title || !address || !city || !price || !bedrooms) {
+        res.status(400).json({ error: 'Missing required fields' });
+        return;
+    }
+    // Get landlord contact info from profile
+    const { data: profile } = await supabase_1.supabase
+        .from('profiles')
+        .select('display_name, email, phone')
+        .eq('id', req.userId)
+        .single();
+    let photoUrls;
+    try {
+        photoUrls = await Promise.all(files.map((f) => (0, storage_1.uploadImage)(f.buffer, 'listings', { width: 1400, quality: 80 })));
+    }
+    catch (err) {
+        console.error('Photo upload error:', err);
+        res.status(500).json({ error: 'Failed to upload photos' });
+        return;
+    }
+    const domStartDate = await resolveDomStartDate(req.userId, address);
+    const { data, error } = await supabase_1.supabase
+        .from('listings')
+        .insert({
+        landlord_id: req.userId,
+        title,
+        description,
+        address,
+        city,
+        state,
+        zip,
+        monthly_rent: +price,
+        bedrooms: +bedrooms,
+        bathrooms: +(bathrooms ?? 1),
+        living_area_sqft: +(sqft ?? 0),
+        property_type: propertyType ?? 'house',
+        available_date: availableFrom ?? null,
+        amenities: JSON.parse(amenities ?? '[]'),
+        photos: photoUrls,
+        rental_status: 'active',
+        view_count: 0,
+        applicant_count: 0,
+        refreshed_at: new Date().toISOString(),
+        listed_date: new Date().toISOString().split('T')[0],
+        expires_at: expiresAt(),
+        dom_start_date: domStartDate,
+        contact_name: profile?.display_name ?? null,
+        contact_email: profile?.email ?? null,
+        contact_phone: profile?.phone ?? null,
+    })
+        .select()
+        .single();
+    if (error || !data) {
+        res.status(500).json({ error: error?.message ?? 'Could not create listing' });
+        return;
+    }
+    triggerCityPageRevalidation(zip);
+    res.status(201).json(normalizeListing(data));
+});
+// ─── PUT /listings/:id ────────────────────────────────────────────────────────
+router.put('/:id', auth_1.requireAuth, async (req, res) => {
+    const { data: listing } = await supabase_1.supabase
+        .from('listings')
+        .select('landlord_id')
+        .eq('id', req.params.id)
+        .single();
+    if (!listing || listing.landlord_id !== req.userId) {
+        res.status(403).json({ error: 'Not authorized' });
+        return;
+    }
+    const fieldMap = {
+        price: 'monthly_rent',
+        sqft: 'living_area_sqft',
+        availableFrom: 'available_date',
+        status: 'rental_status',
+    };
+    const allowed = ['title', 'description', 'price', 'sqft', 'availableFrom', 'amenities', 'status', 'property_type'];
+    const updates = {};
+    for (const key of allowed) {
+        if (req.body[key] !== undefined) {
+            const dbKey = fieldMap[key] ?? key;
+            updates[dbKey] = req.body[key];
+        }
+    }
+    const { data, error } = await supabase_1.supabase
+        .from('listings')
+        .update(updates)
+        .eq('id', req.params.id)
+        .select()
+        .single();
+    if (error) {
+        res.status(500).json({ error: error.message });
+        return;
+    }
+    res.json(normalizeListing(data));
+});
+// ─── DELETE /listings/:id ─────────────────────────────────────────────────────
+router.delete('/:id', auth_1.requireAuth, async (req, res) => {
+    const { data: listing } = await supabase_1.supabase
+        .from('listings')
+        .select('landlord_id')
+        .eq('id', req.params.id)
+        .single();
+    if (!listing || listing.landlord_id !== req.userId) {
+        res.status(403).json({ error: 'Not authorized' });
+        return;
+    }
+    await supabase_1.supabase.from('listings').delete().eq('id', req.params.id);
+    res.json({ ok: true });
+});
+// ─── POST /listings/:id/extend ───────────────────────────────────────────────
+// Extend listing expiry by 45 days from today
+router.post('/:id/extend', auth_1.requireAuth, async (req, res) => {
+    const { data: listing } = await supabase_1.supabase
+        .from('listings')
+        .select('landlord_id, rental_status')
+        .eq('id', req.params.id)
+        .single();
+    if (!listing || listing.landlord_id !== req.userId) {
+        res.status(403).json({ error: 'Not authorized' });
+        return;
+    }
+    const newExpiry = expiresAt();
+    const { data, error } = await supabase_1.supabase
+        .from('listings')
+        .update({ expires_at: newExpiry, rental_status: 'active' })
+        .eq('id', req.params.id)
+        .select()
+        .single();
+    if (error) {
+        res.status(500).json({ error: error.message });
+        return;
+    }
+    res.json({ ...normalizeListing(data), expiresAt: newExpiry });
+});
+// ─── POST /listings/:id/deactivate ───────────────────────────────────────────
+router.post('/:id/deactivate', auth_1.requireAuth, async (req, res) => {
+    const { data: listing } = await supabase_1.supabase
+        .from('listings')
+        .select('landlord_id')
+        .eq('id', req.params.id)
+        .single();
+    if (!listing || listing.landlord_id !== req.userId) {
+        res.status(403).json({ error: 'Not authorized' });
+        return;
+    }
+    const { data, error } = await supabase_1.supabase
+        .from('listings')
+        .update({ rental_status: 'paused' })
+        .eq('id', req.params.id)
+        .select()
+        .single();
+    if (error) {
+        res.status(500).json({ error: error.message });
+        return;
+    }
+    res.json(normalizeListing(data));
+});
+// ─── POST /listings/:id/refresh ───────────────────────────────────────────────
+router.post('/:id/refresh', auth_1.requireAuth, async (req, res) => {
+    const { data: listing } = await supabase_1.supabase
+        .from('listings')
+        .select('landlord_id, refreshed_at')
+        .eq('id', req.params.id)
+        .single();
+    if (!listing || listing.landlord_id !== req.userId) {
+        res.status(403).json({ error: 'Not authorized' });
+        return;
+    }
+    if (listing.refreshed_at) {
+        const lastRefresh = new Date(listing.refreshed_at).getTime();
+        if (Date.now() - lastRefresh < 24 * 60 * 60 * 1000) {
+            res.status(429).json({ error: 'You can only refresh once every 24 hours' });
+            return;
+        }
+    }
+    const { data, error } = await supabase_1.supabase
+        .from('listings')
+        .update({ refreshed_at: new Date().toISOString() })
+        .eq('id', req.params.id)
+        .select()
+        .single();
+    if (error) {
+        res.status(500).json({ error: error.message });
+        return;
+    }
+    res.json(normalizeListing(data));
+});
+// ─── POST /listings/:id/apply ─────────────────────────────────────────────────
+router.post('/:id/apply', auth_1.requireAuth, async (req, res) => {
+    const { message, income, tenantPhone, tenantName, moveIn } = req.body;
+    if (!message || !income) {
+        res.status(400).json({ error: 'Message and income are required' });
+        return;
+    }
+    const { data: existing } = await supabase_1.supabase
+        .from('applications')
+        .select('id')
+        .eq('listing_id', req.params.id)
+        .eq('tenant_id', req.userId)
+        .single();
+    if (existing) {
+        res.status(409).json({ error: 'You have already applied to this listing' });
+        return;
+    }
+    const { data: listing } = await supabase_1.supabase
+        .from('listings')
+        .select('monthly_rent, bedrooms, property_type, landlord_id, title, address, city, state')
+        .eq('id', req.params.id)
+        .single();
+    let aiScore = null;
+    let aiSummary = null;
+    if (listing) {
+        try {
+            const result = await (0, claude_1.scoreApplication)({
+                listing: { price: listing.monthly_rent, bedrooms: listing.bedrooms, propertyType: listing.property_type ?? 'house' },
+                application: { income: +income, message },
+            });
+            aiScore = result.score;
+            aiSummary = result.summary;
+        }
+        catch (e) {
+            console.error('AI scoring failed (non-fatal):', e);
+        }
+    }
+    const { data: application, error } = await supabase_1.supabase
+        .from('applications')
+        .insert({
+        listing_id: req.params.id,
+        tenant_id: req.userId,
+        tenant_name: tenantName,
+        tenant_phone: tenantPhone,
+        message,
+        income: +income,
+        move_in: moveIn || null,
+        ai_match_score: aiScore,
+        ai_summary: aiSummary,
+        status: 'pending',
+    })
+        .select()
+        .single();
+    if (error) {
+        res.status(500).json({ error: error.message });
+        return;
+    }
+    supabase_1.supabase.rpc('increment_applicant_count', { listing_id: req.params.id }).then(() => { });
+    // Notify landlord of new application (fire and forget)
+    if (listing?.landlord_id) {
+        const { data: landlord } = await supabase_1.supabase
+            .from('profiles').select('display_name, email').eq('id', listing.landlord_id).single();
+        const { data: tenant } = await supabase_1.supabase
+            .from('profiles').select('display_name').eq('id', req.userId).single();
+        (0, notifications_1.notifyUser)(supabase_1.supabase, listing.landlord_id, {
+            title: '📋 New Application',
+            body: `${tenantName || tenant?.display_name || 'Someone'} applied to your listing`,
+            data: { screen: 'applications', listingId: req.params.id },
+        }).catch(() => { });
+        if (landlord?.email) {
+            (0, email_1.sendApplicationEmail)({
+                landlordEmail: landlord.email,
+                landlordName: landlord.display_name ?? 'there',
+                tenantName: tenantName || tenant?.display_name || 'Applicant',
+                tenantPhone: tenantPhone ?? '',
+                income: +income,
+                message,
+                moveIn: moveIn || undefined,
+                listingTitle: listing.title ?? 'Your listing',
+                listingAddress: listing.address ?? '',
+                listingCity: listing.city ?? '',
+                listingState: listing.state ?? '',
+                listingPrice: listing.monthly_rent,
+                listingId: String(req.params.id),
+                aiScore: aiScore,
+                aiSummary: aiSummary,
+            }).catch(() => { });
+        }
+    }
+    res.status(201).json(application);
+});
+// ─── POST /listings/:id/apply-web ─────────────────────────────────────────────
+// Public endpoint — no auth required. Used by the emlakie.com website form.
+router.post('/:id/apply-web', async (req, res) => {
+    const { tenantName, tenantPhone, income, moveIn, creditScore, message } = req.body;
+    if (!tenantName || !tenantPhone || !income || !message) {
+        res.status(400).json({ error: 'Name, phone, income, and message are required' });
+        return;
+    }
+    const { data: listing } = await supabase_1.supabase
+        .from('listings')
+        .select('monthly_rent, bedrooms, property_type, landlord_id, title, address, city, state, rental_status')
+        .eq('id', req.params.id)
+        .single();
+    if (!listing) {
+        res.status(404).json({ error: 'Listing not found' });
+        return;
+    }
+    if (listing.rental_status !== 'active') {
+        res.status(409).json({ error: 'Listing is no longer active' });
+        return;
+    }
+    let aiScore = null;
+    let aiSummary = null;
+    try {
+        const result = await (0, claude_1.scoreApplication)({
+            listing: { price: listing.monthly_rent, bedrooms: listing.bedrooms, propertyType: listing.property_type ?? 'house' },
+            application: { income: +income, message },
+        });
+        aiScore = result.score;
+        aiSummary = result.summary;
+    }
+    catch (e) {
+        console.error('AI scoring failed (non-fatal):', e);
+    }
+    const { data: application, error } = await supabase_1.supabase
+        .from('applications')
+        .insert({
+        listing_id: String(req.params.id),
+        tenant_id: null,
+        tenant_name: tenantName,
+        tenant_phone: tenantPhone,
+        message,
+        income: +income,
+        move_in: moveIn || null,
+        credit_score: creditScore ? +creditScore : null,
+        ai_match_score: aiScore,
+        ai_summary: aiSummary,
+        status: 'pending',
+        source: 'web',
+    })
+        .select()
+        .single();
+    if (error) {
+        res.status(500).json({ error: error.message });
+        return;
+    }
+    supabase_1.supabase.rpc('increment_applicant_count', { listing_id: req.params.id }).then(() => { });
+    if (listing.landlord_id) {
+        const { data: landlord } = await supabase_1.supabase
+            .from('profiles').select('display_name, email').eq('id', listing.landlord_id).single();
+        (0, notifications_1.notifyUser)(supabase_1.supabase, listing.landlord_id, {
+            title: '🌐 New Web Application',
+            body: `${tenantName} applied via the website`,
+            data: { screen: 'applications', listingId: String(req.params.id) },
+        }).catch(() => { });
+        if (landlord?.email) {
+            (0, email_1.sendApplicationEmail)({
+                landlordEmail: landlord.email,
+                landlordName: landlord.display_name ?? 'there',
+                tenantName,
+                tenantPhone,
+                income: +income,
+                message,
+                moveIn: moveIn || undefined,
+                creditScore: creditScore ? +creditScore : undefined,
+                listingTitle: listing.title ?? 'Your listing',
+                listingAddress: listing.address ?? '',
+                listingCity: listing.city ?? '',
+                listingState: listing.state ?? '',
+                listingPrice: listing.monthly_rent,
+                listingId: String(req.params.id),
+                aiScore,
+                aiSummary,
+            }).catch(() => { });
+        }
+    }
+    res.status(201).json(application);
+});
+// ─── GET /listings/:id/applications ──────────────────────────────────────────
+router.get('/:id/applications', auth_1.requireAuth, async (req, res) => {
+    const { data: listing } = await supabase_1.supabase
+        .from('listings')
+        .select('landlord_id')
+        .eq('id', req.params.id)
+        .single();
+    if (!listing || listing.landlord_id !== req.userId) {
+        res.status(403).json({ error: 'Not authorized' });
+        return;
+    }
+    const { data, error } = await supabase_1.supabase
+        .from('applications')
+        .select('*')
+        .eq('listing_id', req.params.id)
+        .order('created_at', { ascending: false });
+    if (error) {
+        res.status(500).json({ error: error.message });
+        return;
+    }
+    res.json(data ?? []);
+});
+// ─── POST /listings/:id/save ──────────────────────────────────────────────────
+router.post('/:id/save', auth_1.requireAuth, async (req, res) => {
+    const { error } = await supabase_1.supabase
+        .from('saved_listings')
+        .upsert({ user_id: req.userId, listing_id: req.params.id }, { onConflict: 'user_id,listing_id' });
+    if (error) {
+        res.status(500).json({ error: error.message });
+        return;
+    }
+    res.json({ saved: true });
+});
+// ─── DELETE /listings/:id/save ────────────────────────────────────────────────
+router.delete('/:id/save', auth_1.requireAuth, async (req, res) => {
+    const { error } = await supabase_1.supabase
+        .from('saved_listings')
+        .delete()
+        .eq('user_id', req.userId)
+        .eq('listing_id', req.params.id);
+    if (error) {
+        res.status(500).json({ error: error.message });
+        return;
+    }
+    res.json({ saved: false });
+});
+exports.default = router;
