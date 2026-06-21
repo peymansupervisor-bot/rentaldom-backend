@@ -154,10 +154,10 @@ export async function sendApplicationEmail(data: ApplicationEmailData): Promise<
             <tr>
               <td style="padding:0 32px 32px;text-align:center;">
                 <a href="${listingUrl}" style="display:inline-block;background:#16a34a;color:#fff;text-decoration:none;font-size:15px;font-weight:700;padding:14px 32px;border-radius:10px;">
-                  View Application in App
+                  View Inquiry
                 </a>
                 <p style="margin:14px 0 0;font-size:12px;color:#9ca3af;">
-                  Reply directly to this email to contact ${data.tenantName}
+                  Contact ${data.tenantName} at ${data.tenantPhone}${data.tenantEmail ? ` · ${data.tenantEmail}` : ''}
                 </p>
               </td>
             </tr>
