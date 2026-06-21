@@ -570,6 +570,7 @@ router.post('/:id/apply-web', async (req, res): Promise<void> => {
         landlordName: landlord?.display_name ?? 'there',
         tenantName,
         tenantPhone,
+        tenantEmail: tenantEmail || undefined,
         income: +income,
         message,
         moveIn: moveIn || undefined,

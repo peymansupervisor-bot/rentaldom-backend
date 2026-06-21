@@ -7,6 +7,7 @@ export interface ApplicationEmailData {
   landlordName: string;
   tenantName: string;
   tenantPhone: string;
+  tenantEmail?: string | null;
   income: number;
   message: string;
   moveIn?: string;
@@ -99,6 +100,7 @@ export async function sendApplicationEmail(data: ApplicationEmailData): Promise<
                     <td style="padding-left:12px;vertical-align:middle;">
                       <p style="margin:0;font-size:17px;font-weight:800;color:#111827;">${data.tenantName}</p>
                       <p style="margin:3px 0 0;font-size:13px;color:#6b7280;">${data.tenantPhone}</p>
+                      ${data.tenantEmail ? `<p style="margin:2px 0 0;font-size:13px;color:#6b7280;">${data.tenantEmail}</p>` : ''}
                     </td>
                   </tr>
                 </table>
