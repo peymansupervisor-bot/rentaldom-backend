@@ -163,7 +163,7 @@ async function sendApplicationEmail(data) {
         await resend.emails.send({
             from: FROM,
             to: data.landlordEmail,
-            replyTo: data.tenantPhone ? undefined : undefined,
+            replyTo: data.tenantEmail ?? undefined,
             subject: `New Inquiry: ${data.tenantName} is interested in ${data.listingTitle}`,
             html,
         });
