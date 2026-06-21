@@ -453,10 +453,13 @@ router.post('/:id/apply', requireAuth, async (req: AuthRequest, res): Promise<vo
 
   // Notify landlord of new application (fire and forget)
   if (listing?.landlord_id) {
-    const { data: landlord } = await supabase
-      .from('profiles').select('display_name, email').eq('id', listing.landlord_id).single();
-    const { data: tenant } = await supabase
-      .from('profiles').select('display_name').eq('id', req.userId).single();
+    const [{ data: landlord }, { data: tenant }, { data: { user: authUser } }] = await Promise.all([
+      supabase.from('profiles').select('display_name').eq('id', listing.landlord_id).single(),
+      supabase.from('profiles').select('display_name').eq('id', req.userId).single(),
+      supabase.auth.admin.getUserById(listing.landlord_id),
+    ]);
+
+    const landlordEmail = authUser?.email ?? null;
 
     notifyUser(supabase, listing.landlord_id, {
       title: '📋 New Application',
@@ -464,10 +467,10 @@ router.post('/:id/apply', requireAuth, async (req: AuthRequest, res): Promise<vo
       data: { screen: 'applications', listingId: req.params.id },
     }).catch(() => {});
 
-    if (landlord?.email) {
+    if (landlordEmail) {
       sendApplicationEmail({
-        landlordEmail: landlord.email,
-        landlordName: landlord.display_name ?? 'there',
+        landlordEmail,
+        landlordName: landlord?.display_name ?? 'there',
         tenantName: tenantName || tenant?.display_name || 'Applicant',
         tenantPhone: tenantPhone ?? '',
         income: +income,
@@ -544,8 +547,15 @@ router.post('/:id/apply-web', async (req, res): Promise<void> => {
   supabase.rpc('increment_applicant_count', { listing_id: req.params.id }).then(() => {});
 
   if (listing.landlord_id) {
-    const { data: landlord } = await supabase
-      .from('profiles').select('display_name, email').eq('id', listing.landlord_id).single();
+    const [{ data: landlord }, { data: { user: authUser } }] = await Promise.all([
+      supabase.from('profiles').select('display_name').eq('id', listing.landlord_id).single(),
+      supabase.auth.admin.getUserById(listing.landlord_id),
+    ]);
+
+    const landlordEmail = authUser?.email ?? null;
+    if (!landlordEmail) {
+      console.warn('[apply-web] No email found for landlord', listing.landlord_id);
+    }
 
     notifyUser(supabase, listing.landlord_id, {
       title: '🌐 New Inquiry',
@@ -553,10 +563,10 @@ router.post('/:id/apply-web', async (req, res): Promise<void> => {
       data: { screen: 'applications', listingId: String(req.params.id) },
     }).catch(() => {});
 
-    if (landlord?.email) {
+    if (landlordEmail) {
       sendApplicationEmail({
-        landlordEmail: landlord.email,
-        landlordName: landlord.display_name ?? 'there',
+        landlordEmail,
+        landlordName: landlord?.display_name ?? 'there',
         tenantName,
         tenantPhone,
         income: +income,
