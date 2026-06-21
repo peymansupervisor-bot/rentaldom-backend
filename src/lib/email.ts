@@ -29,7 +29,7 @@ export async function sendApplicationEmail(data: ApplicationEmailData): Promise<
   }
 
   const resend = new Resend(process.env.RESEND_API_KEY);
-  const listingUrl = `https://emlakie.com/rentals/${data.listingId}`;
+  const listingUrl = `https://emlakie.com/landlord/properties/${data.listingId}`;
   const formattedIncome = `$${data.income.toLocaleString()}`;
   const formattedPrice = `$${data.listingPrice.toLocaleString()}`;
 
