@@ -496,8 +496,8 @@ router.post('/:id/apply', requireAuth, async (req: AuthRequest, res): Promise<vo
 router.post('/:id/apply-web', async (req, res): Promise<void> => {
   const { tenantName, tenantPhone, tenantEmail, income, moveIn, creditScore, message } = req.body as Record<string, string>;
 
-  if (!tenantName || !tenantPhone || !income || !message) {
-    res.status(400).json({ error: 'Name, phone, income, and message are required' });
+  if (!tenantName || !tenantEmail || !tenantPhone || !income || !message) {
+    res.status(400).json({ error: 'Name, email, phone, income, and message are required' });
     return;
   }
 
@@ -529,6 +529,7 @@ router.post('/:id/apply-web', async (req, res): Promise<void> => {
       listing_id: String(req.params.id),
       tenant_id: null,
       tenant_name: tenantName,
+      tenant_email: tenantEmail,
       tenant_phone: tenantPhone,
       message,
       income: +income,
