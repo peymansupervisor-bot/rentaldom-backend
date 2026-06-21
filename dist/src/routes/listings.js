@@ -419,19 +419,21 @@ router.post('/:id/apply', auth_1.requireAuth, async (req, res) => {
     supabase_1.supabase.rpc('increment_applicant_count', { listing_id: req.params.id }).then(() => { });
     // Notify landlord of new application (fire and forget)
     if (listing?.landlord_id) {
-        const { data: landlord } = await supabase_1.supabase
-            .from('profiles').select('display_name, email').eq('id', listing.landlord_id).single();
-        const { data: tenant } = await supabase_1.supabase
-            .from('profiles').select('display_name').eq('id', req.userId).single();
+        const [{ data: landlord }, { data: tenant }, { data: { user: authUser } }] = await Promise.all([
+            supabase_1.supabase.from('profiles').select('display_name').eq('id', listing.landlord_id).single(),
+            supabase_1.supabase.from('profiles').select('display_name').eq('id', req.userId).single(),
+            supabase_1.supabase.auth.admin.getUserById(listing.landlord_id),
+        ]);
+        const landlordEmail = authUser?.email ?? null;
         (0, notifications_1.notifyUser)(supabase_1.supabase, listing.landlord_id, {
             title: '📋 New Application',
             body: `${tenantName || tenant?.display_name || 'Someone'} applied to your listing`,
             data: { screen: 'applications', listingId: req.params.id },
         }).catch(() => { });
-        if (landlord?.email) {
+        if (landlordEmail) {
             (0, email_1.sendApplicationEmail)({
-                landlordEmail: landlord.email,
-                landlordName: landlord.display_name ?? 'there',
+                landlordEmail,
+                landlordName: landlord?.display_name ?? 'there',
                 tenantName: tenantName || tenant?.display_name || 'Applicant',
                 tenantPhone: tenantPhone ?? '',
                 income: +income,
@@ -453,9 +455,9 @@ router.post('/:id/apply', auth_1.requireAuth, async (req, res) => {
 // ─── POST /listings/:id/apply-web ─────────────────────────────────────────────
 // Public endpoint — no auth required. Used by the emlakie.com website form.
 router.post('/:id/apply-web', async (req, res) => {
-    const { tenantName, tenantPhone, income, moveIn, creditScore, message } = req.body;
-    if (!tenantName || !tenantPhone || !income || !message) {
-        res.status(400).json({ error: 'Name, phone, income, and message are required' });
+    const { tenantName, tenantPhone, tenantEmail, income, moveIn, creditScore, message } = req.body;
+    if (!tenantName || !tenantEmail || !tenantPhone || !income || !message) {
+        res.status(400).json({ error: 'Name, email, phone, income, and message are required' });
         return;
     }
     const { data: listing } = await supabase_1.supabase
@@ -490,6 +492,7 @@ router.post('/:id/apply-web', async (req, res) => {
         listing_id: String(req.params.id),
         tenant_id: null,
         tenant_name: tenantName,
+        tenant_email: tenantEmail,
         tenant_phone: tenantPhone,
         message,
         income: +income,
@@ -508,17 +511,23 @@ router.post('/:id/apply-web', async (req, res) => {
     }
     supabase_1.supabase.rpc('increment_applicant_count', { listing_id: req.params.id }).then(() => { });
     if (listing.landlord_id) {
-        const { data: landlord } = await supabase_1.supabase
-            .from('profiles').select('display_name, email').eq('id', listing.landlord_id).single();
+        const [{ data: landlord }, { data: { user: authUser } }] = await Promise.all([
+            supabase_1.supabase.from('profiles').select('display_name').eq('id', listing.landlord_id).single(),
+            supabase_1.supabase.auth.admin.getUserById(listing.landlord_id),
+        ]);
+        const landlordEmail = authUser?.email ?? null;
+        if (!landlordEmail) {
+            console.warn('[apply-web] No email found for landlord', listing.landlord_id);
+        }
         (0, notifications_1.notifyUser)(supabase_1.supabase, listing.landlord_id, {
             title: '🌐 New Inquiry',
             body: `${tenantName} sent an inquiry via the website`,
             data: { screen: 'applications', listingId: String(req.params.id) },
         }).catch(() => { });
-        if (landlord?.email) {
+        if (landlordEmail) {
             (0, email_1.sendApplicationEmail)({
-                landlordEmail: landlord.email,
-                landlordName: landlord.display_name ?? 'there',
+                landlordEmail,
+                landlordName: landlord?.display_name ?? 'there',
                 tenantName,
                 tenantPhone,
                 income: +income,
@@ -534,6 +543,32 @@ router.post('/:id/apply-web', async (req, res) => {
                 aiScore,
                 aiSummary,
             }).catch(() => { });
+        }
+        // Auto-reply to tenant — AI-generated message with static fallback
+        if (tenantEmail) {
+            const fallbackMessage = `Thank you for your inquiry! We've received your message and the landlord will review it shortly. We'll be in touch as soon as possible.`;
+            (0, claude_1.generateTenantAutoReply)({
+                tenantName,
+                landlordName: landlord?.display_name ?? 'the landlord',
+                listingTitle: listing.title ?? 'this property',
+                listingCity: listing.city ?? '',
+                listingPrice: listing.monthly_rent,
+                tenantMessage: message,
+            })
+                .catch(() => fallbackMessage)
+                .then((aiMessage) => (0, email_1.sendTenantAutoReply)({
+                tenantEmail,
+                tenantName,
+                landlordName: landlord?.display_name ?? 'the landlord',
+                listingTitle: listing.title ?? 'this property',
+                listingAddress: listing.address ?? '',
+                listingCity: listing.city ?? '',
+                listingState: listing.state ?? '',
+                listingPrice: listing.monthly_rent,
+                listingId: String(req.params.id),
+                aiMessage,
+            }))
+                .catch(() => { });
         }
     }
     res.status(201).json(application);

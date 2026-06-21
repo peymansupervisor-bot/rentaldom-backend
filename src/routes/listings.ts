@@ -585,8 +585,9 @@ router.post('/:id/apply-web', async (req, res): Promise<void> => {
       }).catch(() => {});
     }
 
-    // AI auto-reply to tenant
+    // Auto-reply to tenant — AI-generated message with static fallback
     if (tenantEmail) {
+      const fallbackMessage = `Thank you for your inquiry! We've received your message and the landlord will review it shortly. We'll be in touch as soon as possible.`;
       generateTenantAutoReply({
         tenantName,
         landlordName: landlord?.display_name ?? 'the landlord',
@@ -594,20 +595,23 @@ router.post('/:id/apply-web', async (req, res): Promise<void> => {
         listingCity: listing.city ?? '',
         listingPrice: listing.monthly_rent,
         tenantMessage: message,
-      }).then((aiMessage) =>
-        sendTenantAutoReply({
-          tenantEmail,
-          tenantName,
-          landlordName: landlord?.display_name ?? 'the landlord',
-          listingTitle: listing.title ?? 'this property',
-          listingAddress: listing.address ?? '',
-          listingCity: listing.city ?? '',
-          listingState: listing.state ?? '',
-          listingPrice: listing.monthly_rent,
-          listingId: String(req.params.id),
-          aiMessage,
-        })
-      ).catch(() => {});
+      })
+        .catch(() => fallbackMessage)
+        .then((aiMessage) =>
+          sendTenantAutoReply({
+            tenantEmail,
+            tenantName,
+            landlordName: landlord?.display_name ?? 'the landlord',
+            listingTitle: listing.title ?? 'this property',
+            listingAddress: listing.address ?? '',
+            listingCity: listing.city ?? '',
+            listingState: listing.state ?? '',
+            listingPrice: listing.monthly_rent,
+            listingId: String(req.params.id),
+            aiMessage,
+          })
+        )
+        .catch(() => {});
     }
   }
 
