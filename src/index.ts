@@ -37,7 +37,16 @@ app.use(rateLimit({
 }));
 
 // ── Health check ──────────────────────────────────────────────────────────────
-app.get('/health', (_req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
+app.get('/health', (_req, res) => {
+  const checks = {
+    resend_api_key: !!process.env.RESEND_API_KEY,
+    anthropic_api_key: !!process.env.ANTHROPIC_API_KEY,
+    supabase_url: !!process.env.SUPABASE_URL,
+    supabase_service_key: !!process.env.SUPABASE_SERVICE_KEY,
+  };
+  const allOk = Object.values(checks).every(Boolean);
+  res.status(allOk ? 200 : 500).json({ ok: allOk, ts: new Date().toISOString(), checks });
+});
 
 // ── API routes ────────────────────────────────────────────────────────────────
 app.use('/api/auth', authRouter);
