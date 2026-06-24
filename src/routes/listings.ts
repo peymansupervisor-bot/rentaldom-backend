@@ -49,10 +49,13 @@ function calcDom(domStartDate?: string | null): number {
 function normalizeListing(l: any) {
   return {
     ...l,
-    price: l.monthly_rent,
-    sqft: l.living_area_sqft,
-    availableFrom: l.available_date,
+    price: l.monthly_rent ?? 0,
+    sqft: l.living_area_sqft ?? 0,
+    propertyType: l.property_type ?? 'apartment',
+    availableFrom: l.available_date ?? null,
     status: l.rental_status ?? 'active',
+    viewCount: l.view_count ?? 0,
+    applicantCount: l.applicant_count ?? 0,
     expiresAt: l.expires_at ?? null,
     dom: calcDom(l.dom_start_date),
     domStartDate: l.dom_start_date ?? null,
