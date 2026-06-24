@@ -5,7 +5,7 @@ const EXPIRES_IN = process.env.JWT_EXPIRES_IN ?? '30d';
 
 export interface JwtPayload {
   userId: string;
-  phone: string;
+  email: string;
 }
 
 export function signToken(payload: JwtPayload): string {

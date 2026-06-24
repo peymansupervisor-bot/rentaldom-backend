@@ -8,8 +8,8 @@ function getAdminApp(): App {
   return initializeApp({ credential: cert(JSON.parse(serviceAccount)) });
 }
 
-export async function verifyFirebaseToken(idToken: string): Promise<{ phone: string; uid: string }> {
+export async function verifyFirebaseToken(idToken: string): Promise<{ email: string; uid: string }> {
   const decoded = await getAuth(getAdminApp()).verifyIdToken(idToken);
-  if (!decoded.phone_number) throw new Error('Token does not contain a phone number');
-  return { phone: decoded.phone_number, uid: decoded.uid };
+  if (!decoded.email) throw new Error('Token does not contain an email address');
+  return { email: decoded.email, uid: decoded.uid };
 }

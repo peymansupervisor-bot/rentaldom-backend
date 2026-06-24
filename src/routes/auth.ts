@@ -18,7 +18,7 @@ const tokenLimit = rateLimit({
 });
 
 // ─── POST /auth/verify-firebase-token ────────────────────────────────────────
-// Called by the app after Firebase Phone Auth confirms the OTP on-device.
+// Called by the app after Firebase Email/Password Auth signs in on-device.
 // Receives the Firebase ID token, validates it, and returns an Emlakie JWT.
 router.post('/verify-firebase-token', tokenLimit, async (req, res): Promise<void> => {
   const { idToken } = req.body as { idToken?: string };
@@ -28,9 +28,9 @@ router.post('/verify-firebase-token', tokenLimit, async (req, res): Promise<void
     return;
   }
 
-  let phone: string;
+  let email: string;
   try {
-    ({ phone } = await verifyFirebaseToken(idToken));
+    ({ email } = await verifyFirebaseToken(idToken));
   } catch (err: any) {
     console.error('Firebase token verification error:', err);
     res.status(401).json({ error: 'Invalid or expired authentication token' });
@@ -40,7 +40,7 @@ router.post('/verify-firebase-token', tokenLimit, async (req, res): Promise<void
   const { data: existing } = await supabase
     .from('profiles')
     .select('*')
-    .eq('phone', phone)
+    .eq('email', email)
     .single();
 
   let user = existing;
@@ -50,7 +50,7 @@ router.post('/verify-firebase-token', tokenLimit, async (req, res): Promise<void
     isNewUser = true;
     const { data: created, error } = await supabase
       .from('profiles')
-      .insert({ phone, email: `${phone.replace(/\D/g, '')}@emlakie.com` })
+      .insert({ email })
       .select()
       .single();
 
@@ -61,7 +61,7 @@ router.post('/verify-firebase-token', tokenLimit, async (req, res): Promise<void
     user = created;
   }
 
-  const token = signToken({ userId: user.id, phone: user.phone });
+  const token = signToken({ userId: user.id, email: user.email });
   res.json({ token, user: normalizeUser(user), isNewUser });
 });
 
@@ -91,7 +91,7 @@ router.post('/complete-profile', requireAuth, async (req: AuthRequest, res): Pro
     return;
   }
 
-  const token = signToken({ userId: user.id, phone: user.phone });
+  const token = signToken({ userId: user.id, email: user.email });
   res.json({ token, user: normalizeUser(user) });
 });
 
@@ -139,11 +139,11 @@ router.post('/logout', requireAuth, (_req, res) => {
 function normalizeUser(p: any) {
   return {
     id: p.id,
-    phone: p.phone,
+    email: p.email,
     name: p.display_name,
     role: p.role,
     avatar: p.avatar_url,
-    email: p.email,
+    verified: true,
     createdAt: p.created_at,
   };
 }
