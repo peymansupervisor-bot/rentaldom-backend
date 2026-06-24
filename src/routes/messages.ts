@@ -83,6 +83,126 @@ router.get('/:conversationId', requireAuth, async (req: AuthRequest, res): Promi
   res.json((data ?? []).reverse());
 });
 
+// ─── POST /messages/contact ── guest (no account needed) ─────────────────────
+// Tenant provides name + email + message. We create/find their account silently,
+// create the conversation, and email them a magic link to continue in-app.
+router.post('/contact', async (req, res): Promise<void> => {
+  const { listingId, name, email, message } = req.body as {
+    listingId?: string; name?: string; email?: string; message?: string;
+  };
+
+  if (!listingId || !name?.trim() || !email?.trim() || !message?.trim()) {
+    res.status(400).json({ error: 'listingId, name, email, and message are required' });
+    return;
+  }
+
+  const normalizedEmail = email.trim().toLowerCase();
+
+  // Resolve listing + landlord
+  const { data: listing } = await supabase
+    .from('listings')
+    .select('landlord_id, title')
+    .eq('id', listingId)
+    .single();
+
+  if (!listing?.landlord_id) {
+    res.status(404).json({ error: 'Listing not found' });
+    return;
+  }
+
+  // Find or create Supabase auth user
+  const { data: existingUsers } = await supabase.auth.admin.listUsers();
+  const existingUser = existingUsers?.users?.find((u) => u.email === normalizedEmail);
+
+  let userId: string;
+
+  if (existingUser) {
+    userId = existingUser.id;
+  } else {
+    const { data: created, error: createErr } = await supabase.auth.admin.createUser({
+      email: normalizedEmail,
+      email_confirm: true,
+      user_metadata: { full_name: name.trim() },
+    });
+    if (createErr || !created.user) {
+      res.status(500).json({ error: 'Could not create guest account' });
+      return;
+    }
+    userId = created.user.id;
+  }
+
+  // Find or create profile
+  const { data: profile } = await supabase.from('profiles').select('id').eq('id', userId).single();
+  if (!profile) {
+    await supabase.from('profiles').insert({
+      id: userId,
+      email: normalizedEmail,
+      display_name: name.trim(),
+      role: 'tenant',
+    });
+  } else if (!profile) {
+    await supabase.from('profiles').update({ display_name: name.trim() }).eq('id', userId);
+  }
+
+  // Find or create conversation
+  const { data: existing } = await supabase
+    .from('conversations')
+    .select('id')
+    .eq('listing_id', listingId)
+    .eq('tenant_id', userId)
+    .single();
+
+  let conversationId: string;
+  const now = new Date().toISOString();
+
+  if (existing) {
+    conversationId = existing.id;
+  } else {
+    const { data: conv, error: convErr } = await supabase
+      .from('conversations')
+      .insert({
+        listing_id: listingId,
+        tenant_id: userId,
+        landlord_id: listing.landlord_id,
+        last_message: message.trim(),
+        last_message_at: now,
+      })
+      .select('id')
+      .single();
+    if (convErr || !conv) { res.status(500).json({ error: 'Could not start conversation' }); return; }
+    conversationId = conv.id;
+  }
+
+  // Insert message
+  await supabase.from('app_messages').insert({
+    conversation_id: conversationId,
+    sender_id: userId,
+    body: message.trim(),
+    delivered_at: now,
+  });
+
+  await supabase.from('conversations')
+    .update({ last_message: message.trim(), last_message_at: now })
+    .eq('id', conversationId);
+
+  // Send magic link so tenant can log in later
+  await supabase.auth.admin.generateLink({
+    type: 'magiclink',
+    email: normalizedEmail,
+    options: { redirectTo: `emlakie://messages/${conversationId}` },
+  });
+
+  // Notify landlord
+  const { notifyUser } = await import('../lib/notifications');
+  notifyUser(supabase, listing.landlord_id, {
+    title: `New message from ${name.trim()}`,
+    body: message.trim().length > 80 ? message.trim().slice(0, 77) + '...' : message.trim(),
+    data: { screen: 'messages', conversationId },
+  }).catch(() => {});
+
+  res.status(201).json({ conversationId, isGuest: !existingUser });
+});
+
 // ─── POST /messages/start ─────────────────────────────────────────────────────
 router.post('/start', requireAuth, async (req: AuthRequest, res): Promise<void> => {
   const { listingId, firstMessage } = req.body as { listingId?: string; firstMessage?: string };
