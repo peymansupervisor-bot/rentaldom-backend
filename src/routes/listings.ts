@@ -53,7 +53,7 @@ function normalizeListing(l: any) {
     sqft: l.living_area_sqft ?? 0,
     propertyType: l.property_type ?? 'apartment',
     availableFrom: l.available_date ?? null,
-    status: l.rental_status ?? 'active',
+    status: l.status ?? 'active',
     viewCount: l.view_count ?? 0,
     applicantCount: l.applicant_count ?? 0,
     expiresAt: l.expires_at ?? null,
@@ -76,7 +76,7 @@ async function resolveDomStartDate(landlordId: string, address: string): Promise
     .select('dom_start_date')
     .eq('landlord_id', landlordId)
     .ilike('address', address.trim())
-    .neq('rental_status', 'rented')           // rented = was genuinely off market, DOM resets
+    .neq('status', 'rented')                   // rented = was genuinely off market, DOM resets
     .gte('listed_date', yearStart)             // same calendar year only
     .order('created_at', { ascending: true })
     .limit(1)
@@ -92,7 +92,7 @@ router.get('/', async (req, res): Promise<void> => {
   let query = supabase
     .from('listings')
     .select('*', { count: 'exact' })
-    .eq('rental_status', 'active')
+    .eq('status', 'active')
     .gt('expires_at', new Date().toISOString())   // exclude expired listings
     .order('refreshed_at', { ascending: false })
     .range((+page - 1) * +limit, +page * +limit - 1);
@@ -230,7 +230,7 @@ router.post(
         available_date: availableFrom ?? null,
         amenities: JSON.parse(amenities ?? '[]'),
         photos: photoUrls,
-        rental_status: 'active',
+        status: 'active',
         view_count: 0,
         applicant_count: 0,
         refreshed_at: new Date().toISOString(),
@@ -271,7 +271,7 @@ router.put('/:id', requireAuth, async (req: AuthRequest, res): Promise<void> => 
     price: 'monthly_rent',
     sqft: 'living_area_sqft',
     availableFrom: 'available_date',
-    status: 'rental_status',
+    status: 'status',
   };
   const allowed = ['title', 'description', 'price', 'sqft', 'availableFrom', 'amenities', 'status', 'property_type'];
   const updates: Record<string, unknown> = {};
@@ -315,7 +315,7 @@ router.delete('/:id', requireAuth, async (req: AuthRequest, res): Promise<void> 
 router.post('/:id/extend', requireAuth, async (req: AuthRequest, res): Promise<void> => {
   const { data: listing } = await supabase
     .from('listings')
-    .select('landlord_id, rental_status')
+    .select('landlord_id, status')
     .eq('id', req.params.id)
     .single();
 
@@ -327,7 +327,7 @@ router.post('/:id/extend', requireAuth, async (req: AuthRequest, res): Promise<v
   const newExpiry = expiresAt();
   const { data, error } = await supabase
     .from('listings')
-    .update({ expires_at: newExpiry, rental_status: 'active' })
+    .update({ expires_at: newExpiry, status: 'active' })
     .eq('id', req.params.id)
     .select()
     .single();
@@ -351,7 +351,7 @@ router.post('/:id/deactivate', requireAuth, async (req: AuthRequest, res): Promi
 
   const { data, error } = await supabase
     .from('listings')
-    .update({ rental_status: 'paused' })
+    .update({ status: 'paused' })
     .eq('id', req.params.id)
     .select()
     .single();
@@ -507,12 +507,12 @@ router.post('/:id/apply-web', async (req, res): Promise<void> => {
 
   const { data: listing } = await supabase
     .from('listings')
-    .select('monthly_rent, bedrooms, property_type, landlord_id, title, address, city, state, rental_status')
+    .select('monthly_rent, bedrooms, property_type, landlord_id, title, address, city, state, status')
     .eq('id', req.params.id)
     .single();
 
   if (!listing) { res.status(404).json({ error: 'Listing not found' }); return; }
-  if (listing.rental_status !== 'active') { res.status(409).json({ error: 'Listing is no longer active' }); return; }
+  if (listing.status !== 'active') { res.status(409).json({ error: 'Listing is no longer active' }); return; }
 
   let aiScore = null;
   let aiSummary = null;
