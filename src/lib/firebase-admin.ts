@@ -1,15 +1,14 @@
-import { initializeApp, getApps, cert, App } from 'firebase-admin/app';
-import { getAuth } from 'firebase-admin/auth';
+import { createClient } from '@supabase/supabase-js';
 
-function getAdminApp(): App {
-  if (getApps().length > 0) return getApps()[0];
-  const serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT;
-  if (!serviceAccount) throw new Error('FIREBASE_SERVICE_ACCOUNT env var is missing');
-  return initializeApp({ credential: cert(JSON.parse(serviceAccount)) });
-}
+const supabaseAdmin = createClient(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_KEY!,
+);
 
-export async function verifyFirebaseToken(idToken: string): Promise<{ email: string; uid: string }> {
-  const decoded = await getAuth(getAdminApp()).verifyIdToken(idToken);
-  if (!decoded.email) throw new Error('Token does not contain an email address');
-  return { email: decoded.email, uid: decoded.uid };
+// Kept as verifyFirebaseToken for minimal diff — now verifies Supabase JWTs
+export async function verifyFirebaseToken(accessToken: string): Promise<{ email: string; uid: string }> {
+  const { data: { user }, error } = await supabaseAdmin.auth.getUser(accessToken);
+  if (error || !user) throw new Error('Invalid or expired token');
+  if (!user.email) throw new Error('Token does not contain an email address');
+  return { email: user.email, uid: user.id };
 }
