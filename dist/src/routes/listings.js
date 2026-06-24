@@ -543,7 +543,7 @@ router.post('/:id/apply-web', async (req, res) => {
                 listingId: String(req.params.id),
                 aiScore,
                 aiSummary,
-            }).catch(() => { });
+            }).catch((err) => console.error('[apply-web] landlord email failed:', err));
         }
         // Auto-reply to tenant — AI-generated message with static fallback
         if (tenantEmail) {

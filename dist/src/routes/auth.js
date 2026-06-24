@@ -17,7 +17,7 @@ const tokenLimit = (0, rateLimit_1.rateLimit)({
     legacyHeaders: false,
 });
 // ─── POST /auth/verify-firebase-token ────────────────────────────────────────
-// Called by the app after Firebase Phone Auth confirms the OTP on-device.
+// Called by the app after Firebase Email/Password Auth signs in on-device.
 // Receives the Firebase ID token, validates it, and returns an Emlakie JWT.
 router.post('/verify-firebase-token', tokenLimit, async (req, res) => {
     const { idToken } = req.body;
@@ -25,9 +25,9 @@ router.post('/verify-firebase-token', tokenLimit, async (req, res) => {
         res.status(400).json({ error: 'idToken is required' });
         return;
     }
-    let phone;
+    let email;
     try {
-        ({ phone } = await (0, firebase_admin_1.verifyFirebaseToken)(idToken));
+        ({ email } = await (0, firebase_admin_1.verifyFirebaseToken)(idToken));
     }
     catch (err) {
         console.error('Firebase token verification error:', err);
@@ -37,7 +37,7 @@ router.post('/verify-firebase-token', tokenLimit, async (req, res) => {
     const { data: existing } = await supabase_1.supabase
         .from('profiles')
         .select('*')
-        .eq('phone', phone)
+        .eq('email', email)
         .single();
     let user = existing;
     let isNewUser = false;
@@ -45,7 +45,7 @@ router.post('/verify-firebase-token', tokenLimit, async (req, res) => {
         isNewUser = true;
         const { data: created, error } = await supabase_1.supabase
             .from('profiles')
-            .insert({ phone, email: `${phone.replace(/\D/g, '')}@emlakie.com` })
+            .insert({ email })
             .select()
             .single();
         if (error || !created) {
@@ -54,7 +54,7 @@ router.post('/verify-firebase-token', tokenLimit, async (req, res) => {
         }
         user = created;
     }
-    const token = (0, jwt_1.signToken)({ userId: user.id, phone: user.phone });
+    const token = (0, jwt_1.signToken)({ userId: user.id, email: user.email });
     res.json({ token, user: normalizeUser(user), isNewUser });
 });
 // ─── POST /auth/complete-profile ─────────────────────────────────────────────
@@ -79,7 +79,7 @@ router.post('/complete-profile', auth_1.requireAuth, async (req, res) => {
         res.status(500).json({ error: 'Could not update profile' });
         return;
     }
-    const token = (0, jwt_1.signToken)({ userId: user.id, phone: user.phone });
+    const token = (0, jwt_1.signToken)({ userId: user.id, email: user.email });
     res.json({ token, user: normalizeUser(user) });
 });
 // ─── POST /auth/upload-avatar ─────────────────────────────────────────────────
@@ -118,11 +118,11 @@ router.post('/logout', auth_1.requireAuth, (_req, res) => {
 function normalizeUser(p) {
     return {
         id: p.id,
-        phone: p.phone,
+        email: p.email,
         name: p.display_name,
         role: p.role,
         avatar: p.avatar_url,
-        email: p.email,
+        verified: true,
         createdAt: p.created_at,
     };
 }

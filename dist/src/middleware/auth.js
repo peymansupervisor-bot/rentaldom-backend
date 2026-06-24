@@ -13,7 +13,7 @@ async function requireAuth(req, res, next) {
     try {
         const payload = (0, jwt_1.verifyToken)(header.slice(7));
         req.userId = payload.userId;
-        req.userPhone = payload.phone;
+        req.userEmail = payload.email;
         next();
     }
     catch {
