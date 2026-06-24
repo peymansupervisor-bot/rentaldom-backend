@@ -154,6 +154,55 @@ router.post('/start', requireAuth, async (req: AuthRequest, res): Promise<void> 
   res.status(201).json({ conversationId, message });
 });
 
+// ─── POST /messages/:conversationId/send ─────────────────────────────────────
+router.post('/:conversationId/send', requireAuth, async (req: AuthRequest, res): Promise<void> => {
+  const { text } = req.body as { text?: string };
+  if (!text?.trim()) { res.status(400).json({ error: 'text is required' }); return; }
+
+  const { data: conv } = await supabase
+    .from('conversations')
+    .select('tenant_id, landlord_id')
+    .eq('id', req.params.conversationId)
+    .single();
+
+  if (!conv || (conv.tenant_id !== req.userId && conv.landlord_id !== req.userId)) {
+    res.status(403).json({ error: 'Not authorized' }); return;
+  }
+
+  const now = new Date().toISOString();
+  const { data: message, error } = await supabase
+    .from('app_messages')
+    .insert({ conversation_id: req.params.conversationId, sender_id: req.userId, body: text.trim(), delivered_at: now })
+    .select()
+    .single();
+
+  if (error || !message) { res.status(500).json({ error: 'Failed to send message' }); return; }
+
+  await supabase
+    .from('conversations')
+    .update({ last_message: text.trim(), last_message_at: now })
+    .eq('id', req.params.conversationId);
+
+  const recipientId = conv.tenant_id === req.userId ? conv.landlord_id : conv.tenant_id;
+  const { data: sender } = await supabase.from('profiles').select('display_name').eq('id', req.userId).single();
+  const { notifyUser } = await import('../lib/notifications');
+  notifyUser(supabase, recipientId, {
+    title: sender?.display_name ?? 'New Message',
+    body: text.trim().length > 80 ? text.trim().slice(0, 77) + '...' : text.trim(),
+    data: { screen: 'messages', conversationId: req.params.conversationId },
+  }).catch(() => {});
+
+  res.status(201).json({
+    id: message.id,
+    conversationId: message.conversation_id,
+    senderId: message.sender_id,
+    text: message.body,
+    createdAt: message.created_at,
+    deliveredAt: message.delivered_at,
+    readAt: message.read_at,
+  });
+});
+
 // ─── POST /messages/:conversationId/read ─────────────────────────────────────
 router.post('/:conversationId/read', requireAuth, async (req: AuthRequest, res): Promise<void> => {
   const now = new Date().toISOString();

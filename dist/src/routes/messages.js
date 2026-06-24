@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const supabase_1 = require("../lib/supabase");
@@ -145,6 +178,54 @@ router.post('/start', auth_1.requireAuth, async (req, res) => {
         return;
     }
     res.status(201).json({ conversationId, message });
+});
+// ─── POST /messages/:conversationId/send ─────────────────────────────────────
+router.post('/:conversationId/send', auth_1.requireAuth, async (req, res) => {
+    const { text } = req.body;
+    if (!text?.trim()) {
+        res.status(400).json({ error: 'text is required' });
+        return;
+    }
+    const { data: conv } = await supabase_1.supabase
+        .from('conversations')
+        .select('tenant_id, landlord_id')
+        .eq('id', req.params.conversationId)
+        .single();
+    if (!conv || (conv.tenant_id !== req.userId && conv.landlord_id !== req.userId)) {
+        res.status(403).json({ error: 'Not authorized' });
+        return;
+    }
+    const now = new Date().toISOString();
+    const { data: message, error } = await supabase_1.supabase
+        .from('app_messages')
+        .insert({ conversation_id: req.params.conversationId, sender_id: req.userId, body: text.trim(), delivered_at: now })
+        .select()
+        .single();
+    if (error || !message) {
+        res.status(500).json({ error: 'Failed to send message' });
+        return;
+    }
+    await supabase_1.supabase
+        .from('conversations')
+        .update({ last_message: text.trim(), last_message_at: now })
+        .eq('id', req.params.conversationId);
+    const recipientId = conv.tenant_id === req.userId ? conv.landlord_id : conv.tenant_id;
+    const { data: sender } = await supabase_1.supabase.from('profiles').select('display_name').eq('id', req.userId).single();
+    const { notifyUser } = await Promise.resolve().then(() => __importStar(require('../lib/notifications')));
+    notifyUser(supabase_1.supabase, recipientId, {
+        title: sender?.display_name ?? 'New Message',
+        body: text.trim().length > 80 ? text.trim().slice(0, 77) + '...' : text.trim(),
+        data: { screen: 'messages', conversationId: req.params.conversationId },
+    }).catch(() => { });
+    res.status(201).json({
+        id: message.id,
+        conversationId: message.conversation_id,
+        senderId: message.sender_id,
+        text: message.body,
+        createdAt: message.created_at,
+        deliveredAt: message.delivered_at,
+        readAt: message.read_at,
+    });
 });
 // ─── POST /messages/:conversationId/read ─────────────────────────────────────
 router.post('/:conversationId/read', auth_1.requireAuth, async (req, res) => {
