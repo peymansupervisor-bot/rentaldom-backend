@@ -30,7 +30,7 @@ router.get('/mine', auth_1.requireAuth, async (req, res) => {
         bathrooms,
         property_type,
         photos,
-        rental_status
+        status
       )
     `)
         .eq('tenant_id', req.userId)
@@ -60,7 +60,7 @@ router.get('/mine', auth_1.requireAuth, async (req, res) => {
                 bathrooms: row.listings.bathrooms,
                 propertyType: row.listings.property_type,
                 photos: row.listings.photos ?? [],
-                status: row.listings.rental_status,
+                status: row.listings.status,
             }
             : null,
     }));

@@ -52,7 +52,7 @@ function normalizeListing(l) {
         sqft: l.living_area_sqft ?? 0,
         propertyType: l.property_type ?? 'apartment',
         availableFrom: l.available_date ?? null,
-        status: l.rental_status ?? 'active',
+        status: l.status ?? 'active',
         viewCount: l.view_count ?? 0,
         applicantCount: l.applicant_count ?? 0,
         expiresAt: l.expires_at ?? null,
@@ -73,7 +73,7 @@ async function resolveDomStartDate(landlordId, address) {
         .select('dom_start_date')
         .eq('landlord_id', landlordId)
         .ilike('address', address.trim())
-        .neq('rental_status', 'rented') // rented = was genuinely off market, DOM resets
+        .neq('status', 'rented') // rented = was genuinely off market, DOM resets
         .gte('listed_date', yearStart) // same calendar year only
         .order('created_at', { ascending: true })
         .limit(1)
@@ -82,11 +82,11 @@ async function resolveDomStartDate(landlordId, address) {
 }
 // ─── GET /listings ────────────────────────────────────────────────────────────
 router.get('/', async (req, res) => {
-    const { city, zip, minPrice, maxPrice, bedrooms, propertyType, page = '1', limit = '20' } = req.query;
+    const { city, zip, minPrice, maxPrice, bedrooms, propertyType, ownerDirect, page = '1', limit = '20' } = req.query;
     let query = supabase_1.supabase
         .from('listings')
         .select('*', { count: 'exact' })
-        .eq('rental_status', 'active')
+        .eq('status', 'active')
         .gt('expires_at', new Date().toISOString()) // exclude expired listings
         .order('refreshed_at', { ascending: false })
         .range((+page - 1) * +limit, +page * +limit - 1);
@@ -102,6 +102,8 @@ router.get('/', async (req, res) => {
         query = query.eq('bedrooms', +bedrooms);
     if (propertyType)
         query = query.eq('property_type', propertyType);
+    if (ownerDirect === '1')
+        query = query.eq('listing_source', 'owner');
     const { data, error, count } = await query;
     if (error) {
         res.status(500).json({ error: error.message });
@@ -175,7 +177,7 @@ router.post('/', auth_1.requireAuth, upload_1.upload.array('photos', 30), async 
         res.status(400).json({ error: 'At least 1 photo is required' });
         return;
     }
-    const { title, description, address, city, state, zip, price, bedrooms, bathrooms, sqft, propertyType, availableFrom, amenities, } = req.body;
+    const { title, description, address, city, state, zip, price, bedrooms, bathrooms, sqft, propertyType, availableFrom, amenities, listingSource, licenseNumber, agentName, officeName, } = req.body;
     if (!title || !address || !city || !price || !bedrooms) {
         res.status(400).json({ error: 'Missing required fields' });
         return;
@@ -214,7 +216,7 @@ router.post('/', auth_1.requireAuth, upload_1.upload.array('photos', 30), async 
         available_date: availableFrom ?? null,
         amenities: JSON.parse(amenities ?? '[]'),
         photos: photoUrls,
-        rental_status: 'active',
+        status: 'active',
         view_count: 0,
         applicant_count: 0,
         refreshed_at: new Date().toISOString(),
@@ -224,6 +226,10 @@ router.post('/', auth_1.requireAuth, upload_1.upload.array('photos', 30), async 
         contact_name: profile?.display_name ?? null,
         contact_email: profile?.email ?? null,
         contact_phone: profile?.phone ?? null,
+        listing_source: listingSource === 'broker' ? 'broker' : 'owner',
+        license_number: licenseNumber?.trim() || null,
+        agent_name: agentName?.trim() || null,
+        office_name: officeName?.trim() || null,
     })
         .select()
         .single();
@@ -249,7 +255,7 @@ router.put('/:id', auth_1.requireAuth, async (req, res) => {
         price: 'monthly_rent',
         sqft: 'living_area_sqft',
         availableFrom: 'available_date',
-        status: 'rental_status',
+        status: 'status',
     };
     const allowed = ['title', 'description', 'price', 'sqft', 'availableFrom', 'amenities', 'status', 'property_type'];
     const updates = {};
@@ -290,7 +296,7 @@ router.delete('/:id', auth_1.requireAuth, async (req, res) => {
 router.post('/:id/extend', auth_1.requireAuth, async (req, res) => {
     const { data: listing } = await supabase_1.supabase
         .from('listings')
-        .select('landlord_id, rental_status')
+        .select('landlord_id, status')
         .eq('id', req.params.id)
         .single();
     if (!listing || listing.landlord_id !== req.userId) {
@@ -300,7 +306,7 @@ router.post('/:id/extend', auth_1.requireAuth, async (req, res) => {
     const newExpiry = expiresAt();
     const { data, error } = await supabase_1.supabase
         .from('listings')
-        .update({ expires_at: newExpiry, rental_status: 'active' })
+        .update({ expires_at: newExpiry, status: 'active' })
         .eq('id', req.params.id)
         .select()
         .single();
@@ -323,7 +329,7 @@ router.post('/:id/deactivate', auth_1.requireAuth, async (req, res) => {
     }
     const { data, error } = await supabase_1.supabase
         .from('listings')
-        .update({ rental_status: 'paused' })
+        .update({ status: 'paused' })
         .eq('id', req.params.id)
         .select()
         .single();
@@ -466,14 +472,14 @@ router.post('/:id/apply-web', async (req, res) => {
     }
     const { data: listing } = await supabase_1.supabase
         .from('listings')
-        .select('monthly_rent, bedrooms, property_type, landlord_id, title, address, city, state, rental_status')
+        .select('monthly_rent, bedrooms, property_type, landlord_id, title, address, city, state, status')
         .eq('id', req.params.id)
         .single();
     if (!listing) {
         res.status(404).json({ error: 'Listing not found' });
         return;
     }
-    if (listing.rental_status !== 'active') {
+    if (listing.status !== 'active') {
         res.status(409).json({ error: 'Listing is no longer active' });
         return;
     }

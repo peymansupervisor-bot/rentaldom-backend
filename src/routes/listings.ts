@@ -185,7 +185,7 @@ router.post(
     const {
       title, description, address, city, state, zip,
       price, bedrooms, bathrooms, sqft, propertyType,
-      availableFrom, amenities,
+      availableFrom, amenities, listingSource, licenseNumber, agentName, officeName,
     } = req.body as Record<string, string>;
 
     if (!title || !address || !city || !price || !bedrooms) {
@@ -241,6 +241,10 @@ router.post(
         contact_name: profile?.display_name ?? null,
         contact_email: profile?.email ?? null,
         contact_phone: profile?.phone ?? null,
+        listing_source: listingSource === 'broker' ? 'broker' : 'owner',
+        license_number: licenseNumber?.trim() || null,
+        agent_name: agentName?.trim() || null,
+        office_name: officeName?.trim() || null,
       })
       .select()
       .single();
