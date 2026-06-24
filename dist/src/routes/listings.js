@@ -120,7 +120,9 @@ router.get('/mine', auth_1.requireAuth, async (req, res) => {
         res.status(500).json({ error: error.message });
         return;
     }
-    res.json((data ?? []).map(normalizeListing));
+    // Exclude skeleton/incomplete listings (no rent AND no photos)
+    const complete = (data ?? []).filter((l) => (l.monthly_rent ?? 0) > 0 || (l.photos ?? []).length > 0);
+    res.json(complete.map(normalizeListing));
 });
 // ─── GET /listings/saved ──────────────────────────────────────────────────────
 router.get('/saved', auth_1.requireAuth, async (req, res) => {
