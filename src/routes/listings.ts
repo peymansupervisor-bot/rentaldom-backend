@@ -87,7 +87,7 @@ async function resolveDomStartDate(landlordId: string, address: string): Promise
 
 // ─── GET /listings ────────────────────────────────────────────────────────────
 router.get('/', async (req, res): Promise<void> => {
-  const { city, zip, minPrice, maxPrice, bedrooms, propertyType, page = '1', limit = '20' } = req.query as Record<string, string>;
+  const { city, zip, minPrice, maxPrice, bedrooms, propertyType, ownerDirect, page = '1', limit = '20' } = req.query as Record<string, string>;
 
   let query = supabase
     .from('listings')
@@ -104,6 +104,7 @@ router.get('/', async (req, res): Promise<void> => {
   if (maxPrice) query = query.lte('monthly_rent', +maxPrice);
   if (bedrooms) query = query.eq('bedrooms', +bedrooms);
   if (propertyType) query = query.eq('property_type', propertyType);
+  if (ownerDirect === '1') query = query.eq('listing_source', 'owner');
 
   const { data, error, count } = await query;
   if (error) { res.status(500).json({ error: error.message }); return; }
